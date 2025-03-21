@@ -128,6 +128,8 @@ class RolloutStorage:
                 next_values = last_values
             else:
                 next_values = self.values[step + 1]
+            
+            # GAE
             next_is_not_terminal = 1.0 - self.dones[step].float()
             delta = self.rewards[step] + next_is_not_terminal * gamma * next_values - self.values[step]
             advantage = delta + next_is_not_terminal * gamma * lam * advantage
