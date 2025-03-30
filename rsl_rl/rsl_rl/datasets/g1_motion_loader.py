@@ -327,7 +327,7 @@ class AMPLoader:
         """Returns frame for the given trajectory at the specified time."""
         p = times / np.maximum(self.trajectory_lens[traj_idxs], 1e-10)  # Avoid division by zero
         n = self.trajectory_num_frames[traj_idxs]
-        idx_low, idx_high = np.floor(p * n).astype(np.int), np.ceil(p * n).astype(np.int)
+        idx_low, idx_high = np.floor(p * n).astype(int), np.ceil(p * n).astype(int)
         
         # Clamp indices to valid range
         idx_low = np.clip(idx_low, 0, n - 1)
@@ -360,7 +360,7 @@ class AMPLoader:
         """Returns full frames for the given trajectories at the specified times."""
         p = times / np.maximum(self.trajectory_lens[traj_idxs], 1e-10)  # Avoid division by zero
         n = self.trajectory_num_frames[traj_idxs]
-        idx_low, idx_high = np.floor(p * n).astype(np.int), np.ceil(p * n).astype(np.int)
+        idx_low, idx_high = np.floor(p * n).astype(int), np.ceil(p * n).astype(int)
         
         # Clamp indices to valid range
         idx_low = np.clip(idx_low, 0, n - 1)  

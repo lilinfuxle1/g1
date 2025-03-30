@@ -57,6 +57,13 @@ HIP_OFFSETS = torch.tensor([
     [-0.183, 0.047, 0.],
     [-0.183, -0.047, 0.]]) + COM_OFFSET
 
+COM_OFFSET = torch.tensor([0.012731, 0.002186, 0.000515])
+HIP_OFFSETS_HUMANOID = torch.tensor([
+    [0.0, 0.064452, -0.1027],
+    [0.0, -0.064452, -0.1027]
+]) + COM_OFFSET
+
+
 
 class G1LeggedRobot(BaseTask):
     def __init__(self, cfg: LeggedRobotCfg, sim_params, physics_engine, sim_device, headless):
@@ -281,8 +288,11 @@ class G1LeggedRobot(BaseTask):
             self.obs_buf = self.privileged_obs_buf[:, 6:]
         else:
             self.obs_buf = torch.clone(self.privileged_obs_buf)
-
+    '''
     def get_amp_observations(self):
+        print("[DEBUG] dof_names:", self.dof_names)
+        print("[DEBUG] dof_pos shape:", self.dof_pos.shape)
+        
         joint_pos = self.dof_pos
         foot_pos = self.foot_positions_in_base_frame(self.dof_pos).to(self.device)
         base_lin_vel = self.base_lin_vel
@@ -290,6 +300,28 @@ class G1LeggedRobot(BaseTask):
         joint_vel = self.dof_vel
         z_pos = self.root_states[:, 2:3]
         return torch.cat((joint_pos, foot_pos, base_lin_vel, base_ang_vel, joint_vel, z_pos), dim=-1)
+    
+    def get_amp_observations(self):
+        print("[DEBUG] dof_names:", self.dof_names)
+        print("[DEBUG] dof_pos shape:", self.dof_pos.shape)
+        
+        joint_pos = self.dof_pos  # [128, 29]
+        # 仅提取腿部数据：根据数据顺序，前12个关节对应两条腿
+        leg_dof_pos = self.dof_pos[:, :12]  # [128, 12]
+        foot_pos = self.foot_positions_in_base_frame(leg_dof_pos).to(self.device)  # 计算得到足位，应为 [128, 6]
+        base_lin_vel = self.base_lin_vel  # [128, 3]
+        base_ang_vel = self.base_ang_vel  # [128, 3]
+        joint_vel = self.dof_vel           # [128, 29]
+        z_pos = self.root_states[:, 2:3]     # [128, 1]
+        # 拼接后最终 AMP 观测维度为 29 + 6 + 3 + 3 + 29 + 1 = 71
+        return torch.cat((joint_pos, foot_pos, base_lin_vel, base_ang_vel, joint_vel, z_pos), dim=-1)
+    '''
+    def get_amp_observations(self):
+        # 只保留机器人关节位置和基座高度（z 轴）作为 AMP 的 state
+        joint_pos = self.dof_pos          # [num_env, 29]
+        z_pos = self.root_states[:, 2:3]    # [num_env, 1]
+        # 拼接后维度为 29 + 1 = 30，与 AMPLoader.expert 数据一致
+        return torch.cat((joint_pos, z_pos), dim=-1)
 
     def create_sim(self):
         """ Creates simulation, terrain and evironments
@@ -563,7 +595,7 @@ class G1LeggedRobot(BaseTask):
             self.command_ranges["lin_vel_x"][0] = np.clip(self.command_ranges["lin_vel_x"][0] - 0.5, -self.cfg.commands.max_curriculum, 0.)
             self.command_ranges["lin_vel_x"][1] = np.clip(self.command_ranges["lin_vel_x"][1] + 0.5, 0., self.cfg.commands.max_curriculum)
 
-
+    '''
     def _get_noise_scale_vec(self, cfg):
         """ Sets a vector used to scale the noise added to the observations.
             [NOTE]: Must be adapted when changing the observations structure
@@ -587,6 +619,37 @@ class G1LeggedRobot(BaseTask):
         noise_vec[36:48] = 0. # previous actions
         if self.cfg.terrain.measure_heights:
             noise_vec[48:235] = noise_scales.height_measurements* noise_level * self.obs_scales.height_measurements
+        return noise_vec
+    '''
+    def _get_noise_scale_vec(self, cfg):
+        """
+        Sets a vector used to scale the noise added to the observations.
+        This function is updated for a privileged observation vector of dimension 99:
+        [0:3]   -> base_lin_vel (3)
+        [3:6]   -> base_ang_vel (3)
+        [6:9]   -> gravity (3)
+        [9:12]  -> commands (3)      (set to 0)
+        [12:41] -> dof_pos (29)
+        [41:70] -> dof_vel (29)
+        [70:99] -> actions (29)      (set to 0)
+        """
+        # Create a zero vector with the same shape as a single privileged observation.
+        noise_vec = torch.zeros_like(self.privileged_obs_buf[0])
+        self.add_noise = self.cfg.noise.add_noise
+        noise_scales = self.cfg.noise.noise_scales
+        noise_level = self.cfg.noise.noise_level
+
+        # Set scales for each segment:
+        noise_vec[0:3] = noise_scales.lin_vel * noise_level * self.obs_scales.lin_vel         # 3 elements
+        noise_vec[3:6] = noise_scales.ang_vel * noise_level * self.obs_scales.ang_vel         # 3 elements
+        noise_vec[6:9] = noise_scales.gravity * noise_level                                   # 3 elements
+        noise_vec[9:12] = 0.                                                                  # commands: 3 elements (no noise)
+        noise_vec[12:41] = noise_scales.dof_pos * noise_level * self.obs_scales.dof_pos         # 29 elements
+        noise_vec[41:70] = noise_scales.dof_vel * noise_level * self.obs_scales.dof_vel         # 29 elements
+        noise_vec[70:99] = 0.                                                                 # actions: 29 elements (no noise)
+
+        # 如果你的配置中启用了高度测量，则可能还会在之后拼接另外的部分；
+        # 否则直接返回 noise_vec
         return noise_vec
 
     #----------------------------------------
@@ -688,14 +751,35 @@ class G1LeggedRobot(BaseTask):
         off_y = torch.cos(theta_ab) * off_y_hip - torch.sin(theta_ab) * off_z_hip
         off_z = torch.sin(theta_ab) * off_y_hip + torch.cos(theta_ab) * off_z_hip
         return torch.stack([off_x, off_y, off_z], dim=-1)
-
+    '''
     def foot_positions_in_base_frame(self, foot_angles):
         foot_positions = torch.zeros_like(foot_angles)
         for i in range(4):
             foot_positions[:, i * 3:i * 3 + 3].copy_(
                 self.foot_position_in_hip_frame(foot_angles[:, i * 3: i * 3 + 3], l_hip_sign=(-1)**(i)))
         foot_positions = foot_positions + HIP_OFFSETS.reshape(12,).to(self.device)
+        return foot_positions'
+    '''
+    def foot_positions_in_base_frame(self, leg_angles):
+        # 假设传入的 leg_angles 的 shape 为 [num_env, 12]
+        # 左腿关节数据：索引 0~5；右腿关节数据：索引 6~11。
+        # 为简单起见，这里只取每条腿的前 3 个角度用于计算（你可以根据需要调整）
+        left_leg_angles = leg_angles[:, :3]     # [num_env, 3]
+        right_leg_angles = leg_angles[:, 6:9]     # [num_env, 3]
+        
+        # 用已有的 foot_position_in_hip_frame 计算足在髋部坐标系下的位置
+        left_foot_pos = self.foot_position_in_hip_frame(left_leg_angles, l_hip_sign=1)
+        right_foot_pos = self.foot_position_in_hip_frame(right_leg_angles, l_hip_sign=-1)
+        
+        # 拼接左右足位置，最终得到 shape 为 [num_env, 6]
+        foot_positions = torch.cat([left_foot_pos, right_foot_pos], dim=-1)
+        
+        # 注意：这里需要定义适合人形机器人的偏移量，形状应为 (6,)
+        # 例如（数值仅为示例，请根据实际需求调整）：
+        # HIP_OFFSETS_HUMANOID = torch.tensor([0.0, -0.05, 0.0, 0.0, 0.05, 0.0])
+        foot_positions = foot_positions + HIP_OFFSETS_HUMANOID.reshape(6,).to(self.device)
         return foot_positions
+
 
     def _prepare_reward_function(self):
         """ Prepares a list of reward functions, whcih will be called to compute the total reward.

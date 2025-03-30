@@ -41,9 +41,9 @@ class G1AMPCfg( LeggedRobotCfg ):
         # num_envs = 5480
         num_envs = 128
         include_history_steps = None  # Number of steps of history to include.
-        # 3 + 3 + 3 + 3 + 29 + 29 + 29 = 98
-        num_observations = 92
-        num_privileged_obs = 98
+        # 3 + 3 + 3 + 3 + 29 + 29 + 29 = 99
+        num_observations = 93
+        num_privileged_obs = 99
         reference_state_initialization = True
         reference_state_initialization_prob = 0.85
         amp_motion_files = MOTION_FILES
@@ -209,7 +209,8 @@ class G1AMPCfgPPO( LeggedRobotCfgPPO ):
 
         amp_reward_coef = 2.0
         amp_motion_files = MOTION_FILES
-        amp_num_preload_transitions = 2000000
+        #amp_num_preload_transitions = 2000000
+        amp_num_preload_transitions = 20000
         amp_task_reward_lerp = 0.3
         amp_discr_hidden_dims = [1024, 512]
 
